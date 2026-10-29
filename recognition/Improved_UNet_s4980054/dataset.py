@@ -14,6 +14,10 @@ import re
 from pathlib import Path
 from itertools import combinations
 
+import numpy as np
+from PIL import Image
+import torch
+
 NUM_CLASSES = 4
 MASK_STEP = 85  # mask grey levels 0, 85, 170, 255 -> classes 0, 1, 2, 3
 
@@ -66,3 +70,21 @@ def assert_no_case_overlap(root):
                 f"{len(shared)} shared cases, e.g. {sorted(shared)[:5]}"
             )
     return {split: len(case_set) for split, case_set in ids.items()}
+
+def load_image(path):
+    """Greyscale image as a (H, W) uint8 array."""
+    return np.array(Image.open(path).convert("L"), dtype=np.uint8)
+
+def load_mask(path):
+    """Mask as a (H, W) uint8 array of class indices 0..NUM_CLASSES-1."""
+    raw = np.array(Image.open(path).convert("L"), dtype=np.int16)
+    classes = np.rint(raw / MASK_STEP).astype(np.int16)
+    if classes.max() >= NUM_CLASSES or not np.array_equal(classes * MASK_STEP, raw):
+        raise ValueError(
+            f"Unexpected mask values in {path}: {np.unique(raw).tolist()}"
+        )
+    return classes.astype(np.uint8)
+
+def to_one_hot(mask, num_classes=NUM_CLASSES):
+    """(H, W) long class indices -> (C, H, W) float one-hot."""
+    return torch.nn.functional.one_hot(mask, num_classes).permute(2, 0, 1).float()
