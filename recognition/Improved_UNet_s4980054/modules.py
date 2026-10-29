@@ -84,3 +84,22 @@ class UNet(nn.Module):
         x = self.up3(x, x1)
         x = self.up4(x, x0)
         return self.out(x)
+
+class DiceLoss(nn.Module):
+    """Multiclass soft Dice loss: 1 minus the mean Dice over the classes.
+
+    logits: (B, C, H, W) raw model scores.
+    target: (B, C, H, W) one-hot masks.
+    """
+
+    def __init__(self, smooth=1e-5):
+        super().__init__()
+        self.smooth = smooth
+
+    def forward(self, logits, target):
+        probs = torch.softmax(logits, dim=1)
+        dims = (0, 2, 3)  # sum over batch and pixels, keeping one value per class
+        intersection = (probs * target).sum(dim=dims)
+        total = probs.sum(dim=dims) + target.sum(dim=dims)
+        dice = (2 * intersection + self.smooth) / (total + self.smooth)
+        return 1 - dice.mean()
