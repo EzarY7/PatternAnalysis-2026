@@ -8,8 +8,12 @@ PNG per 2D slice and a matching mask PNG:
 
 Masks hold the grey values 0, 85, 170, 255. Dividing by 85 gives the class
 indices 0, 1, 2, 3.
+
+Usage check (prints split sizes, runs the leakage check, loads one batch):
+    python dataset.py --root ~/oasis_data
 """
 
+import argparse
 import random
 import re
 from pathlib import Path
@@ -19,7 +23,7 @@ import numpy as np
 import torch
 import torchvision.transforms.functional as TF
 from PIL import Image
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import InterpolationMode
 
 NUM_CLASSES = 4
@@ -132,3 +136,43 @@ class OASISDataset(Dataset):
         if self.one_hot:
             mask = to_one_hot(mask)
         return image, mask
+
+def get_dataloaders(root, batch_size=8, num_workers=0, augment=True, one_hot=True):
+    """Return (train_loader, val_loader, test_loader).
+
+    Only the training split is augmented and shuffled. Raises an error first if
+    any patient appears in more than one split.
+    """
+    assert_no_case_overlap(root)
+    pin = torch.cuda.is_available()
+
+    train_set = OASISDataset(root, "train", augment=augment, one_hot=one_hot)
+    val_set = OASISDataset(root, "validate", augment=False, one_hot=one_hot)
+    test_set = OASISDataset(root, "test", augment=False, one_hot=one_hot)
+
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
+                              num_workers=num_workers, pin_memory=pin)
+    val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False,
+                            num_workers=num_workers, pin_memory=pin)
+    test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False,
+                             num_workers=num_workers, pin_memory=pin)
+    return train_loader, val_loader, test_loader
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Check the OASIS data pipeline.")
+    parser.add_argument("--root", required=True,
+                        help="folder holding the six keras_png_slices_* folders")
+    parser.add_argument("--batch-size", type=int, default=8)
+    args = parser.parse_args()
+
+    print("Cases per split (no overlap found):", assert_no_case_overlap(args.root))
+
+    loaders = get_dataloaders(args.root, batch_size=args.batch_size)
+    for name, loader in zip(("train", "validate", "test"), loaders):
+        print(f"{name}: {len(loader.dataset)} slices, {len(loader)} batches")
+
+    images, masks = next(iter(loaders[0]))
+    print("image batch:", tuple(images.shape), images.dtype,
+          f"min={images.min():.3f} max={images.max():.3f}")
+    print("mask batch: ", tuple(masks.shape), masks.dtype)
+    print("classes present in batch:", torch.unique(masks.argmax(dim=1)).tolist())
