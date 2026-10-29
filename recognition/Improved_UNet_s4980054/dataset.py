@@ -11,6 +11,8 @@ indices 0, 1, 2, 3.
 """
 
 import re
+from pathlib import Path
+from itertools import combinations
 
 NUM_CLASSES = 4
 MASK_STEP = 85  # mask grey levels 0, 85, 170, 255 -> classes 0, 1, 2, 3
@@ -23,3 +25,44 @@ SPLIT_FOLDERS = {
 }
 
 _NAME_RE = re.compile(r"case_(\d+)_slice_(\d+)")
+
+def list_pairs(root, split):
+    """Return a sorted list of (image_path, mask_path) for one split."""
+    img_folder, seg_folder = SPLIT_FOLDERS[split]
+    img_dir = Path(root).expanduser() / img_folder
+    seg_dir = Path(root).expanduser() / seg_folder
+
+    pairs = []
+    for img_path in sorted(img_dir.glob("case_*.png")):
+        if _NAME_RE.match(img_path.name) is None:
+            continue
+        # case_001_slice_0.nii.png -> seg_001_slice_0.nii.png
+        seg_path = seg_dir / img_path.name.replace("case_", "seg_", 1)
+        if not seg_path.exists():
+            raise FileNotFoundError(f"No mask for {img_path.name}: expected {seg_path}")
+        pairs.append((img_path, seg_path))
+
+    if not pairs:
+        raise FileNotFoundError(f"No images found in {img_dir}")
+    return pairs
+
+def case_ids(root, split):
+    """Set of case (patient) IDs present in a split."""
+    return {_NAME_RE.match(img.name).group(1) for img, _ in list_pairs(root, split)}
+
+
+def assert_no_case_overlap(root):
+    """Raise an error if any case appears in more than one split.
+
+    The data is already split, so this is the leakage check: all slices of a
+    patient must stay in one split. Returns the number of cases per split.
+    """
+    ids = {split: case_ids(root, split) for split in SPLIT_FOLDERS}
+    for a, b in combinations(ids, 2):
+        shared = ids[a] & ids[b]
+        if shared:
+            raise ValueError(
+                f"Case leakage between {a} and {b}: "
+                f"{len(shared)} shared cases, e.g. {sorted(shared)[:5]}"
+            )
+    return {split: len(case_set) for split, case_set in ids.items()}
