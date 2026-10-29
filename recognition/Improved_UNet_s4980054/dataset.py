@@ -17,6 +17,7 @@ from itertools import combinations
 import numpy as np
 from PIL import Image
 import torch
+from torch.utils.data import Dataset
 
 NUM_CLASSES = 4
 MASK_STEP = 85  # mask grey levels 0, 85, 170, 255 -> classes 0, 1, 2, 3
@@ -88,3 +89,28 @@ def load_mask(path):
 def to_one_hot(mask, num_classes=NUM_CLASSES):
     """(H, W) long class indices -> (C, H, W) float one-hot."""
     return torch.nn.functional.one_hot(mask, num_classes).permute(2, 0, 1).float()
+
+class OASISDataset(Dataset):
+    """One split of the OASIS 2D slices.
+
+    Each item is (image, mask):
+        image: float32 (1, H, W), scaled to [0, 1]
+        mask:  float32 (NUM_CLASSES, H, W) one-hot if one_hot=True,
+               otherwise int64 (H, W) class indices
+    """
+
+    def __init__(self, root, split, one_hot=True):
+        self.pairs = list_pairs(root, split)
+        self.one_hot = one_hot
+
+    def __len__(self):
+        return len(self.pairs)
+
+    def __getitem__(self, idx):
+        img_path, seg_path = self.pairs[idx]
+        image = torch.from_numpy(load_image(img_path)).unsqueeze(0)  # (1, H, W)
+        image = image.float() / 255.0
+        mask = torch.from_numpy(load_mask(seg_path)).long()  # (H, W)
+        if self.one_hot:
+            mask = to_one_hot(mask)
+        return image, mask
