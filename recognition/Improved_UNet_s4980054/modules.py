@@ -51,3 +51,36 @@ class DecoderBlock(nn.Module):
         x = self.up(x)
         x = torch.cat([skip, x], dim=1)
         return self.conv(x)
+
+class UNet(nn.Module):
+    """Plain 2D U-Net (baseline).
+
+    base_channels sets the width: the five levels use base, 2*base, 4*base,
+    8*base and 16*base channels. The output has one channel per class.
+    """
+
+    def __init__(self, in_channels=1, num_classes=4, base_channels=16):
+        super().__init__()
+        c = [base_channels * 2 ** i for i in range(5)]
+        self.inc = DoubleConv(in_channels, c[0])
+        self.down1 = EncoderBlock(c[0], c[1])
+        self.down2 = EncoderBlock(c[1], c[2])
+        self.down3 = EncoderBlock(c[2], c[3])
+        self.down4 = EncoderBlock(c[3], c[4])
+        self.up1 = DecoderBlock(c[4], c[3], c[3])
+        self.up2 = DecoderBlock(c[3], c[2], c[2])
+        self.up3 = DecoderBlock(c[2], c[1], c[1])
+        self.up4 = DecoderBlock(c[1], c[0], c[0])
+        self.out = nn.Conv2d(c[0], num_classes, kernel_size=1)
+
+    def forward(self, x):
+        x0 = self.inc(x)
+        x1 = self.down1(x0)
+        x2 = self.down2(x1)
+        x3 = self.down3(x2)
+        x4 = self.down4(x3)
+        x = self.up1(x4, x3)
+        x = self.up2(x, x2)
+        x = self.up3(x, x1)
+        x = self.up4(x, x0)
+        return self.out(x)
