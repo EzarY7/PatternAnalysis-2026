@@ -10,14 +10,17 @@ Masks hold the grey values 0, 85, 170, 255. Dividing by 85 gives the class
 indices 0, 1, 2, 3.
 """
 
+import random
 import re
 from pathlib import Path
 from itertools import combinations
 
 import numpy as np
-from PIL import Image
 import torch
+import torchvision.transforms.functional as TF
+from PIL import Image
 from torch.utils.data import Dataset
+from torchvision.transforms import InterpolationMode
 
 NUM_CLASSES = 4
 MASK_STEP = 85  # mask grey levels 0, 85, 170, 255 -> classes 0, 1, 2, 3
@@ -99,18 +102,33 @@ class OASISDataset(Dataset):
                otherwise int64 (H, W) class indices
     """
 
-    def __init__(self, root, split, one_hot=True):
+    def __init__(self, root, split, augment=False, one_hot=True):
         self.pairs = list_pairs(root, split)
+        self.augment = augment
         self.one_hot = one_hot
 
     def __len__(self):
         return len(self.pairs)
 
+    @staticmethod
+    def _augment(image, mask):
+        """Simple paired augmentation; the same transform hits image and mask."""
+        if random.random() < 0.5:  # horizontal flip
+            image, mask = TF.hflip(image), TF.hflip(mask)
+        if random.random() < 0.5:  # small rotation; nearest-neighbour keeps mask labels intact
+            angle = random.uniform(-10.0, 10.0)
+            image = TF.rotate(image, angle, interpolation=InterpolationMode.BILINEAR)
+            mask = TF.rotate(mask, angle, interpolation=InterpolationMode.NEAREST)
+        return image, mask
+
     def __getitem__(self, idx):
         img_path, seg_path = self.pairs[idx]
-        image = torch.from_numpy(load_image(img_path)).unsqueeze(0)  # (1, H, W)
+        image = torch.from_numpy(load_image(img_path)).unsqueeze(0)  # (1, H, W) uint8
+        mask = torch.from_numpy(load_mask(seg_path)).unsqueeze(0)  # (1, H, W) uint8
+        if self.augment:
+            image, mask = self._augment(image, mask)
         image = image.float() / 255.0
-        mask = torch.from_numpy(load_mask(seg_path)).long()  # (H, W)
+        mask = mask.squeeze(0).long()  # (H, W)
         if self.one_hot:
             mask = to_one_hot(mask)
         return image, mask
