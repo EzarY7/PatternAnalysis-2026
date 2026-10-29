@@ -5,13 +5,17 @@ Usage:
 """
 
 import argparse
+import json
 import random
+import time
+from contextlib import nullcontext
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
 
-from dataset import NUM_CLASSES
-from modules import UNet
+from dataset import NUM_CLASSES, get_dataloaders
+from modules import DiceLoss, UNet
 
 MODELS = {"unet": UNet}
 
@@ -84,6 +88,33 @@ def evaluate(model, loader, device, max_batches=None):
         total += tot
     return dice_from_counts(intersection, total).cpu()
 
+def train_one_epoch(model, loader, optimizer, loss_fn, device, scaler=None, max_batches=None):
+    """One pass over the training data. Returns the mean loss."""
+    model.train()
+    total_loss, n_batches = 0.0, 0
+    for i, (images, masks) in enumerate(loader):
+        if max_batches is not None and i >= max_batches:
+            break
+        images, masks = images.to(device), masks.to(device)
+
+        optimizer.zero_grad()
+        context = torch.autocast(device_type="cuda") if scaler is not None else nullcontext()
+        with context:
+            logits = model(images)
+        loss = loss_fn(logits.float(), masks)
+
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
+
+        total_loss += loss.item()
+        n_batches += 1
+    return total_loss / n_batches
+
 def main():
     args = parse_args()
     set_seed(args.seed)
@@ -92,6 +123,37 @@ def main():
     n_params = sum(p.numel() for p in model.parameters())
     print(f"device: {device} | model: {args.model} | "
           f"base channels: {args.base_channels} | parameters: {n_params:,}")
+
+    train_loader, val_loader, _ = get_dataloaders(
+        args.root, batch_size=args.batch_size, num_workers=args.num_workers)
+    loss_fn = DiceLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    scaler = torch.amp.GradScaler("cuda") if args.amp and device.type == "cuda" else None
+
+    out_dir = Path(args.out_dir) / f"{args.model}_b{args.base_channels}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "config.json").write_text(json.dumps(vars(args), indent=2))
+
+    history, best_dice = [], 0.0
+    for epoch in range(1, args.epochs + 1):
+        start = time.time()
+        train_loss = train_one_epoch(model, train_loader, optimizer, loss_fn,
+                                     device, scaler, args.max_batches)
+        val_dice = evaluate(model, val_loader, device, args.max_batches)
+        mean_dice = val_dice.mean().item()
+        seconds = time.time() - start
+
+        history.append({"epoch": epoch, "train_loss": train_loss,
+                        "val_dice": val_dice.tolist(), "val_mean_dice": mean_dice,
+                        "seconds": seconds})
+        dice_text = " ".join(f"{d:.3f}" for d in val_dice.tolist())
+        print(f"epoch {epoch:3d} | loss {train_loss:.4f} | "
+              f"val dice {dice_text} | mean {mean_dice:.3f} | {seconds:.0f}s")
+
+        if mean_dice > best_dice:
+            best_dice = mean_dice
+            torch.save(model.state_dict(), out_dir / "best.pt")
+        (out_dir / "history.json").write_text(json.dumps(history, indent=2))
 
 
 if __name__ == "__main__":
