@@ -8,7 +8,9 @@ import argparse
 import random
 
 import torch
+import torch.nn.functional as F
 
+from dataset import NUM_CLASSES
 from modules import UNet
 
 MODELS = {"unet": UNet}
@@ -48,6 +50,39 @@ def set_seed(seed):
 def build_model(name, base_channels):
     return MODELS[name](base_channels=base_channels)
 
+def dice_counts(logits, target):
+    """Per-class overlap counts for one batch, from hard predictions.
+
+    logits: (B, C, H, W) raw model scores.
+    target: (B, C, H, W) one-hot masks.
+    Returns (intersection, total), each a tensor with one number per class.
+    """
+    num_classes = logits.shape[1]
+    pred = F.one_hot(logits.argmax(dim=1), num_classes).permute(0, 3, 1, 2).float()
+    dims = (0, 2, 3)  # add up over the batch and all pixels, keep one value per class
+    intersection = (pred * target).sum(dim=dims)
+    total = pred.sum(dim=dims) + target.sum(dim=dims)
+    return intersection, total
+
+
+def dice_from_counts(intersection, total, smooth=1e-5):
+    """Per-class Dice score from counts added up over a whole dataset."""
+    return (2 * intersection + smooth) / (total + smooth)
+
+@torch.no_grad()
+def evaluate(model, loader, device, max_batches=None):
+    """Per-class Dice over a whole dataset (no weight updates)."""
+    model.eval()
+    intersection = torch.zeros(NUM_CLASSES, device=device)
+    total = torch.zeros(NUM_CLASSES, device=device)
+    for i, (images, masks) in enumerate(loader):
+        if max_batches is not None and i >= max_batches:
+            break
+        images, masks = images.to(device), masks.to(device)
+        inter, tot = dice_counts(model(images), masks)
+        intersection += inter
+        total += tot
+    return dice_from_counts(intersection, total).cpu()
 
 def main():
     args = parse_args()
