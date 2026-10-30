@@ -135,3 +135,51 @@ class ContextStage(nn.Module):
 
     def forward(self, x):
         return self.context(self.conv(x))
+
+class UpsampleBlock(nn.Module):
+    """Decoder upsampling (Isensee et al.): repeat each pixel twice in each direction,
+    then a 3x3 convolution that reduces the channel count (the paper halves it)."""
+
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode="nearest"),
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.InstanceNorm2d(out_channels),
+            nn.LeakyReLU(0.01, inplace=True),
+        )
+
+    def forward(self, x):
+        return self.block(x)
+
+class LocalizationBlock(nn.Module):
+    """Localization module (Isensee et al.): a 3x3 convolution that combines the
+    concatenated features, then a 1x1 convolution that reduces the channel count."""
+
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1, bias=False),
+            nn.InstanceNorm2d(in_channels),
+            nn.LeakyReLU(0.01, inplace=True),
+            nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+            nn.InstanceNorm2d(out_channels),
+            nn.LeakyReLU(0.01, inplace=True),
+        )
+
+    def forward(self, x):
+        return self.block(x)
+
+class DecoderStage(nn.Module):
+    """One level of the localization pathway: upsample, concatenate the matching
+    encoder features, then combine them with a localization block."""
+
+    def __init__(self, in_channels, skip_channels, out_channels):
+        super().__init__()
+        self.up = UpsampleBlock(in_channels, out_channels)
+        self.localize = LocalizationBlock(skip_channels + out_channels, out_channels)
+
+    def forward(self, x, skip):
+        x = self.up(x)
+        x = torch.cat([skip, x], dim=1)
+        return self.localize(x)
