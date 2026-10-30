@@ -143,6 +143,31 @@ def print_worst_slices(worst, dataset, dice_by_model, scores, focus):
                              zip(CLASS_NAMES[1:], dice_by_model[focus][idx, 1:].tolist()))
         print(f"{rank}. [{idx}] {name} | {by_model} | {per_class}")
 
+def save_failure_figures(model, dataset, worst, scores, device, out_dir):
+    """One four-panel figure per slice: input, truth, prediction and the pixels that differ."""
+    for rank, idx in enumerate(worst.tolist(), start=1):
+        image, mask = dataset[idx]
+        truth = mask.argmax(dim=0)
+        pred = predict_slice(model, image, device)
+        wrong = (pred != truth).numpy()
+
+        fig, axes = plt.subplots(1, 4, figsize=(12, 3.6))
+        axes[0].imshow(image[0].numpy(), cmap="gray")
+        axes[1].imshow(truth.numpy(), cmap=CLASS_CMAP, vmin=0, vmax=3, interpolation="nearest")
+        axes[2].imshow(pred.numpy(), cmap=CLASS_CMAP, vmin=0, vmax=3, interpolation="nearest")
+        axes[3].imshow(image[0].numpy(), cmap="gray")
+        axes[3].imshow(np.ma.masked_where(~wrong, wrong), cmap=ListedColormap(["red"]),
+                       vmin=0, vmax=1, interpolation="nearest")
+        for ax, title in zip(axes, ["input", "truth", "prediction", "errors (red)"]):
+            ax.set_title(title)
+            ax.axis("off")
+        fig.suptitle(f"#{rank} {dataset.pairs[idx][0].name} | slice score {scores[idx]:.3f}")
+        fig.tight_layout()
+        path = out_dir / f"failure_{rank}.png"
+        fig.savefig(path, dpi=150)
+        plt.close(fig)
+        print(f"saved {path}")
+
 def main():
     args = parse_args()
     device = get_device()
@@ -173,6 +198,7 @@ def main():
     focus = "improved_unet" if "improved_unet" in models else "unet"
     worst = scores[focus].argsort()[:args.n_worst]
     print_worst_slices(worst, test_loader.dataset, dice_by_model, scores, focus)
+    save_failure_figures(models[focus], test_loader.dataset, worst, scores[focus], device, out_dir)
 
 if __name__ == "__main__":
     main()
