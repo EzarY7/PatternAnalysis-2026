@@ -201,3 +201,51 @@ class DeepSupervisionHead(nn.Module):
         for head, feat in zip(self.heads[1:], features[1:]):
             out = self.upscale(out) + head(feat)
         return out
+
+class ImprovedUNet(nn.Module):
+    """Improved U-Net (Isensee et al.), adapted from 3D to 2D.
+
+    Context pathway: five ContextStages (strided convolution + residual context block).
+    Localization pathway: three DecoderStages plus a top level made of an upsampling
+    block and a 3x3 convolution. Deep supervision: segmentation layers at the last three
+    decoder levels, upscaled and summed into one output of raw class scores.
+    """
+
+    def __init__(self, in_channels=1, num_classes=4, base_channels=16, dropout=0.3):
+        super().__init__()
+        c = [base_channels * 2 ** i for i in range(5)]
+
+        # Context pathway: stride 1 at the first level, stride 2 afterwards.
+        self.enc0 = ContextStage(in_channels, c[0], stride=1, dropout=dropout)
+        self.enc1 = ContextStage(c[0], c[1], stride=2, dropout=dropout)
+        self.enc2 = ContextStage(c[1], c[2], stride=2, dropout=dropout)
+        self.enc3 = ContextStage(c[2], c[3], stride=2, dropout=dropout)
+        self.enc4 = ContextStage(c[3], c[4], stride=2, dropout=dropout)
+
+        # Localization pathway.
+        self.dec1 = DecoderStage(c[4], c[3], c[3])
+        self.dec2 = DecoderStage(c[3], c[2], c[2])
+        self.dec3 = DecoderStage(c[2], c[1], c[1])
+        self.up4 = UpsampleBlock(c[1], c[0])
+        self.top = nn.Sequential(
+            nn.Conv2d(2 * c[0], 2 * c[0], kernel_size=3, padding=1, bias=False),
+            nn.InstanceNorm2d(2 * c[0]),
+            nn.LeakyReLU(0.01, inplace=True),
+        )
+
+        # Segmentation layers on the outputs of dec2, dec3 and the top level.
+        self.head = DeepSupervisionHead([c[2], c[1], 2 * c[0]], num_classes)
+
+    def forward(self, x):
+        x0 = self.enc0(x)
+        x1 = self.enc1(x0)
+        x2 = self.enc2(x1)
+        x3 = self.enc3(x2)
+        x4 = self.enc4(x3)
+
+        d1 = self.dec1(x4, x3)
+        d2 = self.dec2(d1, x2)
+        d3 = self.dec3(d2, x1)
+        d4 = self.top(torch.cat([x0, self.up4(d3)], dim=1))
+
+        return self.head([d2, d3, d4])
