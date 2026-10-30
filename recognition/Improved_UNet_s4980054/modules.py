@@ -103,3 +103,22 @@ class DiceLoss(nn.Module):
         total = probs.sum(dim=dims) + target.sum(dim=dims)
         dice = (2 * intersection + self.smooth) / (total + self.smooth)
         return 1 - dice.mean()
+
+class ContextBlock(nn.Module):
+    """Pre-activation residual block (Isensee et al.): two 3x3 convolutions with
+    dropout in between, plus a shortcut that adds the input back."""
+
+    def __init__(self, channels, dropout=0.3):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.InstanceNorm2d(channels),
+            nn.LeakyReLU(0.01, inplace=True),
+            nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False),
+            nn.Dropout2d(dropout),
+            nn.InstanceNorm2d(channels),
+            nn.LeakyReLU(0.01, inplace=True),
+            nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False),
+        )
+
+    def forward(self, x):
+        return x + self.block(x)
