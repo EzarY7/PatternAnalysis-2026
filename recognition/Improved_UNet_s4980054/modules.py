@@ -122,3 +122,16 @@ class ContextBlock(nn.Module):
 
     def forward(self, x):
         return x + self.block(x)
+
+class ContextStage(nn.Module):
+    """One level of the context pathway: a 3x3 convolution (stride 2 halves the
+    image size, stride 1 keeps it) that sets the channel count, then a ContextBlock."""
+
+    def __init__(self, in_channels, out_channels, stride=1, dropout=0.3):
+        super().__init__()
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=3,
+                              stride=stride, padding=1, bias=False)
+        self.context = ContextBlock(out_channels, dropout)
+
+    def forward(self, x):
+        return self.context(self.conv(x))
