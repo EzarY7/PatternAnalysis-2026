@@ -15,9 +15,9 @@ import torch
 import torch.nn.functional as F
 
 from dataset import NUM_CLASSES, get_dataloaders
-from modules import DiceLoss, UNet
+from modules import DiceLoss, UNet, ImprovedUNet
 
-MODELS = {"unet": UNet}
+MODELS = {"unet": UNet, "improved_unet": ImprovedUNet}
 
 
 def parse_args():
