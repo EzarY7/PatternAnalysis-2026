@@ -7,6 +7,7 @@ Usage:
 import argparse
 
 import torch
+import torch.nn.functional as F
 
 from dataset import get_dataloaders
 from train import MODELS, build_model, get_device, evaluate
@@ -36,6 +37,7 @@ def parse_args():
     parser.add_argument("--improved-weights", help="best.pt of the Improved U-Net")
     parser.add_argument("--out-dir", default="figures", help="where figures are saved")
     parser.add_argument("--n-samples", type=int, default=6)
+    parser.add_argument("--n-worst", type=int, default=5)
     args = parser.parse_args()
     if args.unet_weights is None and args.improved_weights is None:
         parser.error("give at least one of --unet-weights and --improved-weights")
@@ -102,6 +104,45 @@ def save_samples(models, dataset, indices, device, path):
     fig.savefig(path, dpi=150)
     plt.close(fig)
 
+@torch.no_grad()
+def per_slice_dice(model, loader, device, smooth=1e-5):
+    """Dice for every slice and class separately.
+
+    Returns (dice, present): two (num_slices, num_classes) tensors, in dataset order.
+    present marks the classes that appear in a slice's ground truth.
+    """
+    model.eval()
+    dice, present = [], []
+    for images, masks in loader:
+        images, masks = images.to(device), masks.to(device)
+        pred = F.one_hot(model(images).argmax(dim=1), masks.shape[1]).permute(0, 3, 1, 2).float()
+        dims = (2, 3)  # sum over the pixels of each slice only
+        inter = (pred * masks).sum(dim=dims)
+        total = pred.sum(dim=dims) + masks.sum(dim=dims)
+        dice.append(((2 * inter + smooth) / (total + smooth)).cpu())
+        present.append((masks.sum(dim=dims) > 0).cpu())
+    return torch.cat(dice), torch.cat(present)
+
+
+def slice_scores(dice, present):
+    """One score per slice: mean Dice over the tissue classes present in its truth."""
+    tissue = present[:, 1:].float()
+    count = tissue.sum(dim=1)
+    scores = (dice[:, 1:] * tissue).sum(dim=1) / count.clamp(min=1)
+    return torch.where(count > 0, scores, torch.ones_like(scores))
+
+
+def print_worst_slices(worst, dataset, dice_by_model, scores, focus):
+    """List the lowest-scoring slices with each model's score and per-class Dice."""
+    print(f"\n{len(worst)} lowest-scoring test slices for {focus} "
+          f"(median slice score {scores[focus].median().item():.3f}):")
+    for rank, idx in enumerate(worst.tolist(), start=1):
+        name = dataset.pairs[idx][0].name
+        by_model = " | ".join(f"{m} {scores[m][idx]:.3f}" for m in scores)
+        per_class = " ".join(f"{c} {d:.2f}" for c, d in
+                             zip(CLASS_NAMES[1:], dice_by_model[focus][idx, 1:].tolist()))
+        print(f"{rank}. [{idx}] {name} | {by_model} | {per_class}")
+
 def main():
     args = parse_args()
     device = get_device()
@@ -124,6 +165,14 @@ def main():
     indices = np.linspace(0, n - 1, args.n_samples + 2)[1:-1].astype(int)
     save_samples(models, test_loader.dataset, indices, device, out_dir / "predictions.png")
     print(f"saved {out_dir / 'predictions.png'}")
+
+    dice_by_model, present = {}, None
+    for name, model in models.items():
+        dice_by_model[name], present = per_slice_dice(model, test_loader, device)
+    scores = {name: slice_scores(d, present) for name, d in dice_by_model.items()}
+    focus = "improved_unet" if "improved_unet" in models else "unet"
+    worst = scores[focus].argsort()[:args.n_worst]
+    print_worst_slices(worst, test_loader.dataset, dice_by_model, scores, focus)
 
 if __name__ == "__main__":
     main()
