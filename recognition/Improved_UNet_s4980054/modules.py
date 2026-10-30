@@ -183,3 +183,21 @@ class DecoderStage(nn.Module):
         x = self.up(x)
         x = torch.cat([skip, x], dim=1)
         return self.localize(x)
+
+class DeepSupervisionHead(nn.Module):
+    """Segmentation layers at several decoder levels (Isensee et al.). Each is a 1x1
+    convolution to class scores; the coarser output is upscaled and added to the next."""
+
+    def __init__(self, channels, num_classes):
+        super().__init__()
+        self.heads = nn.ModuleList(
+            nn.Conv2d(c, num_classes, kernel_size=1) for c in channels
+        )
+        self.upscale = nn.Upsample(scale_factor=2, mode="nearest")
+
+    def forward(self, features):
+        # features: decoder outputs from coarsest to finest, each twice the size of the last
+        out = self.heads[0](features[0])
+        for head, feat in zip(self.heads[1:], features[1:]):
+            out = self.upscale(out) + head(feat)
+        return out
