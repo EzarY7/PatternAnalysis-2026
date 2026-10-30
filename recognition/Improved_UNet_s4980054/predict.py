@@ -13,6 +13,17 @@ from train import MODELS, build_model, get_device, evaluate
 
 CLASS_NAMES = ["background", "CSF", "grey matter", "white matter"]
 
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")  # draw to files only, no window
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.colors import ListedColormap
+from matplotlib.patches import Patch
+
+CLASS_COLOURS = ["black", "#4575b4", "#fdae61", "#ffffbf"]  # background, CSF, grey, white
+CLASS_CMAP = ListedColormap(CLASS_COLOURS)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate a trained model on the OASIS test set.")
@@ -23,6 +34,8 @@ def parse_args():
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--unet-weights", help="best.pt of the plain U-Net")
     parser.add_argument("--improved-weights", help="best.pt of the Improved U-Net")
+    parser.add_argument("--out-dir", default="figures", help="where figures are saved")
+    parser.add_argument("--n-samples", type=int, default=6)
     args = parser.parse_args()
     if args.unet_weights is None and args.improved_weights is None:
         parser.error("give at least one of --unet-weights and --improved-weights")
@@ -57,6 +70,38 @@ def print_comparison(results):
     for n in names:
         print(f"{n}: all labels >= 0.9: {bool((results[n] >= 0.9).all())}")
 
+@torch.no_grad()
+def predict_slice(model, image, device):
+    """Predicted class map (H, W) for one image of shape (1, H, W)."""
+    logits = model(image.unsqueeze(0).to(device))
+    return logits.argmax(dim=1)[0].cpu()
+
+
+def save_samples(models, dataset, indices, device, path):
+    """One row per test slice: input, ground truth, then one prediction per model."""
+    columns = ["input", "truth"] + list(models)
+    fig, axes = plt.subplots(len(indices), len(columns), squeeze=False,
+                             figsize=(3 * len(columns), 3 * len(indices)))
+    for r, idx in enumerate(indices):
+        image, mask = dataset[int(idx)]
+        panels = [image[0], mask.argmax(dim=0)]
+        panels += [predict_slice(m, image, device) for m in models.values()]
+        for c, panel in enumerate(panels):
+            ax = axes[r][c]
+            if c == 0:
+                ax.imshow(panel.numpy(), cmap="gray")
+            else:
+                ax.imshow(panel.numpy(), cmap=CLASS_CMAP, vmin=0, vmax=3,
+                          interpolation="nearest")
+            ax.axis("off")
+            if r == 0:
+                ax.set_title(columns[c])
+    fig.legend(handles=[Patch(color=CLASS_COLOURS[i], label=CLASS_NAMES[i]) for i in range(4)],
+               loc="lower center", ncol=4)
+    fig.tight_layout(rect=(0, 0.04, 1, 1))
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
 def main():
     args = parse_args()
     device = get_device()
@@ -64,15 +109,21 @@ def main():
                                         num_workers=args.num_workers)
     print(f"device: {device} | test set: {len(test_loader.dataset)} slices")
 
-    results = {}
+    results, models = {}, {}
     for name, weights in (("unet", args.unet_weights),
                           ("improved_unet", args.improved_weights)):
         if weights is None:
             continue
-        model = load_model(name, args.base_channels, weights, device)
-        results[name] = evaluate(model, test_loader, device)
+        models[name] = load_model(name, args.base_channels, weights, device)
+        results[name] = evaluate(models[name], test_loader, device)
     print_comparison(results)
 
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(exist_ok=True)
+    n = len(test_loader.dataset)
+    indices = np.linspace(0, n - 1, args.n_samples + 2)[1:-1].astype(int)
+    save_samples(models, test_loader.dataset, indices, device, out_dir / "predictions.png")
+    print(f"saved {out_dir / 'predictions.png'}")
 
 if __name__ == "__main__":
     main()
