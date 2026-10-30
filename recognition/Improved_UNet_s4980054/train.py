@@ -26,7 +26,7 @@ def parse_args():
     parser.add_argument("--model", choices=MODELS, default="unet")
     parser.add_argument("--base-channels", type=int, default=16)
     parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--max-batches", type=int, default=None,
@@ -104,6 +104,29 @@ def train_one_epoch(model, loader, optimizer, loss_fn, device, max_batches=None)
         n_batches += 1
     return total_loss / n_batches
 
+def plot_history(histories, path):
+    """Plot training loss and validation mean Dice per epoch for one or more runs.
+
+    histories maps a label such as "unet" to the list of per-epoch dicts in history.json.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, (ax_loss, ax_dice) = plt.subplots(1, 2, figsize=(10, 4))
+    for label, history in histories.items():
+        epochs = [h["epoch"] for h in history]
+        ax_loss.plot(epochs, [h["train_loss"] for h in history], marker="o", label=label)
+        ax_dice.plot(epochs, [h["val_mean_dice"] for h in history], marker="o", label=label)
+    ax_loss.set(title="Training loss", xlabel="epoch", ylabel="loss")
+    ax_dice.set(title="Validation mean Dice", xlabel="epoch", ylabel="Dice")
+    for ax in (ax_loss, ax_dice):
+        ax.grid(alpha=0.3)
+        ax.legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
 def main():
     args = parse_args()
     set_seed(args.seed)
@@ -143,6 +166,8 @@ def main():
             torch.save(model.state_dict(), out_dir / "best.pt")
         (out_dir / "history.json").write_text(json.dumps(history, indent=2))
 
+    plot_history({args.model: history}, out_dir / "training_curves.png")
+    print(f"saved {out_dir / 'training_curves.png'}")
 
 if __name__ == "__main__":
     main()
