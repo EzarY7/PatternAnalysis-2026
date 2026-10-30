@@ -1,14 +1,13 @@
 """train.py: train a 2D U-Net on the OASIS brain MRI slices.
 
 Usage:
-    python train.py --root ~/oasis_data --model unet --base-channels 16 --epochs 30
+    python train.py --root ~/oasis_data --model unet --base-channels 16 --epochs 15
 """
 
 import argparse
 import json
 import random
 import time
-from contextlib import nullcontext
 from pathlib import Path
 
 import torch
@@ -30,7 +29,6 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--num-workers", type=int, default=0)
-    parser.add_argument("--amp", action="store_true", help="mixed precision (CUDA only)")
     parser.add_argument("--max-batches", type=int, default=None,
                         help="limit batches per epoch (for quick debugging)")
     parser.add_argument("--out-dir", default="runs")
@@ -88,7 +86,7 @@ def evaluate(model, loader, device, max_batches=None):
         total += tot
     return dice_from_counts(intersection, total).cpu()
 
-def train_one_epoch(model, loader, optimizer, loss_fn, device, scaler=None, max_batches=None):
+def train_one_epoch(model, loader, optimizer, loss_fn, device, max_batches=None):
     """One pass over the training data. Returns the mean loss."""
     model.train()
     total_loss, n_batches = 0.0, 0
@@ -98,18 +96,9 @@ def train_one_epoch(model, loader, optimizer, loss_fn, device, scaler=None, max_
         images, masks = images.to(device), masks.to(device)
 
         optimizer.zero_grad()
-        context = torch.autocast(device_type="cuda") if scaler is not None else nullcontext()
-        with context:
-            logits = model(images)
-        loss = loss_fn(logits.float(), masks)
-
-        if scaler is not None:
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss.backward()
-            optimizer.step()
+        loss = loss_fn(model(images), masks)
+        loss.backward()
+        optimizer.step()
 
         total_loss += loss.item()
         n_batches += 1
@@ -128,7 +117,6 @@ def main():
         args.root, batch_size=args.batch_size, num_workers=args.num_workers)
     loss_fn = DiceLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    scaler = torch.amp.GradScaler("cuda") if args.amp and device.type == "cuda" else None
 
     out_dir = Path(args.out_dir) / f"{args.model}_b{args.base_channels}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -138,7 +126,7 @@ def main():
     for epoch in range(1, args.epochs + 1):
         start = time.time()
         train_loss = train_one_epoch(model, train_loader, optimizer, loss_fn,
-                                     device, scaler, args.max_batches)
+                                     device, args.max_batches)
         val_dice = evaluate(model, val_loader, device, args.max_batches)
         mean_dice = val_dice.mean().item()
         seconds = time.time() - start
