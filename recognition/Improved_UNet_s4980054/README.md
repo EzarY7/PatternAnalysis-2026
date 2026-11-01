@@ -225,7 +225,7 @@ not claim that either model is better on Dice.
 | 1 | Improved U-Net reaches Dice ≥ 0.9 on every label on the test set | **Met.** Lowest label is CSF at 0.9542 |
 | 2 | On the same split, its Dice on the lowest-scoring label is at least the baseline's, and the difference is reported | **Not met.** CSF 0.9542 against 0.9565 (−0.0023), within the noise described above |
 | 3 | The 3–5 lowest-Dice test slices are inspected.| **Met.** Five slices in section 7
-| 4 | Peak training GPU memory at most 12 GB | **Met.** 1.26 GB |
+| 4 | Peak training GPU memory at most 6 GB | **Met.** 1.26 GB |
 
 ### 6.2 Training curves
 
@@ -318,7 +318,7 @@ were correct in the failure cases I examined.
 
 ## 9. Artificial Intelligence Usage Disclosure
 
-**Tools used.** Claude (Anthropic)
+**Tools used.** Claude (Anthropic), ChatGPT
 
 **What AI assisted with.**
 
