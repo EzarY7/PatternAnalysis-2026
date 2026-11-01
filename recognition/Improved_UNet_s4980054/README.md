@@ -103,8 +103,8 @@ Each case has 32 slices, and image and mask counts match in every split. Masks a
 **Train.** Run once per model. Everything not listed was left at its default in `train.py`.
 
 ```
-python train.py --root <OASIS folder> --model unet --base-channels 16 --epochs 15
-python train.py --root <OASIS folder> --model improved_unet --base-channels 16 --epochs 15
+python train.py --root <OASIS folder> --model unet --base-channels 16 --epochs 15 --num-workers 4
+python train.py --root <OASIS folder> --model improved_unet --base-channels 16 --epochs 15 --num-workers 4
 ```
 
 Each run writes `runs/<model>_b16/` containing `best.pt`, `config.json`, `history.json` and
